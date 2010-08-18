@@ -1,0 +1,37 @@
+NAME
+  campfire
+
+SYNOPSIS
+  campfire (setup|status) [message*] [options]+
+
+DESCRIPTION
+  a command line script for using 37signal's campfire chat room
+  
+  it's main purpose is listing and posting status messages
+
+PARAMETERS
+  message (-1 ~> message) 
+  --limit=limit, -l (0 ~> integer(limit=10)) 
+  --domain=domain, -d (0 ~> domain) 
+      your campfire subdomain name - loaded from ~/.campfire.yml iff present 
+  --token=token, -t (0 ~> token) 
+      your campfire api token - loaded from ~/.campfire.yml iff present 
+  --room=room, -r (0 ~> room) 
+      which campfire room to post to - loaded from ~/.campfire.yml iff 
+      present 
+  --config=config, -C (0 ~> config=~/.campfire.yml) 
+      specify a config.yml file 
+  --force, -F 
+  --debug, -D 
+  --help, -h 
+
+EXAMPLES
+  . setup the configuration
+      campfire setup
+  
+  . list the most recent 42 status messages
+      campfire status
+  
+  . post a status message
+      campfire status "i am hacking on shiz-nit again today" 
+

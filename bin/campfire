@@ -1,0 +1,227 @@
+#! /usr/bin/env ruby
+
+require 'yaml'
+require 'rubygems'
+require 'main'
+require 'tinder'
+require 'orderedhash'
+
+
+Main {
+
+  name 'campfire'
+
+  description <<-__
+    a command line script for using 37signal's campfire chat room
+
+    it's main purpose is listing and posting status messages
+  __
+
+  examples <<-__
+  . setup the configuration
+      campfire setup
+
+  . list the most recent 42 status messages
+      campfire status
+
+  . post a status message
+      campfire status "i am hacking on shiz-nit again today" 
+  __
+
+  Default = {
+    'config' => '~/.campfire.yml'
+  }
+
+  argument(:message){
+    arity -1
+  }
+
+  option('--limit', '-l'){
+    argument :required
+    cast :integer
+    default 10
+  }
+
+  option('--domain', '-d'){
+    argument :required
+    description "your campfire subdomain name - loaded from #{ Default['config'] } iff present"
+  }
+
+  option('--token', '-t'){
+    argument :required
+    description "your campfire api token - loaded from #{ Default['config'] } iff present"
+  }
+
+  option('--room', '-r'){
+    argument :required
+    description "which campfire room to post to - loaded from #{ Default['config'] } iff present"
+  }
+
+  option('--config', '-C'){
+    argument :required
+    description 'specify a config.yml file'
+    default Default['config']
+  }
+
+  option('--force', '-F'){
+  }
+
+  option('--debug', '-D'){
+  }
+
+  mode(:setup){
+    def run
+      generate_config!
+    end
+  }
+
+  mode(:status){
+    def run
+      setup!
+      message = message_params
+      limit = limit_params
+
+      result = []
+
+      if message
+        message = "status: #{ message }" unless message[/^\s*status\s*:\s*/]
+        response = campfire_room.speak(message)
+        message = response['message']
+        result.push(ordered_hash_for(message))
+      else
+        messages = campfire_room.search('status:')
+        messages.last(limit).each do |message|
+          result.push(ordered_hash_for(message))
+        end
+      end
+
+      y result
+    end
+
+    def ordered_hash_for(message)
+      oh = OrderedHash.new
+      created_at = message['created_at']
+      user_id = message['user_id']
+      user = campfire_room.user(user_id.to_i)
+      oh['user'] = user['name']
+      oh['time'] = message['created_at'] 
+      oh['body'] = message['body'] 
+      oh
+    end
+  }
+
+  def message_params
+    value = params[:message].values.join(' ')
+    value = STDIN.read if value.strip == '-'
+    value.strip.empty? ? nil : value
+  end
+
+  def limit_params
+    params[:limit].value
+  end
+
+  def config_param
+    params['config'].value
+  end
+
+  def room_param
+    params['room'].value
+  end
+
+  def config_path
+    File.expand_path(config_param)
+  end
+
+  def campfire
+    return @campfire if defined?(@campfire)
+    @campfire = Tinder::Campfire.new(@domain, :token => @token)
+  end
+
+  def campfire_room
+    return @campfire_room if defined?(@campfire_room)
+    @campfire_room = campfire.rooms.detect{|room| room.name == @room}
+    @campfire_room.extend(SearchExtension)
+    @campfire_room.extend(UserExtension)
+    @campfire_room
+  end
+
+  module SearchExtension
+    def search(term)
+      room = self
+      term = CGI.escape(term.to_s)
+      return_to_room_id = CGI.escape(room.id.to_s)
+      messages = connection.get("/search?term=#{ term }&return_to_room_id=#{ return_to_room_id }")
+      if messages and messages.is_a?(Hash)
+        messages = messages['messages']
+      end
+      messages.each do |message|
+        message['created_at_time'] = Time.parse(message['created_at'])
+      end
+      messages.replace(messages.sort_by{|message| message['created_at_time']}) 
+      messages
+    end
+  end
+
+  module UserExtension
+    Cached = {}
+
+    def user(id)
+      user = Cached[id]
+      return user if user
+
+      if id
+        user = users.detect{|u| u[:id] == id}
+        unless user
+          user_data = connection.get("/users/#{ id }.json")
+          user = user_data && user_data['user']
+        end
+        user['created_at'] = Time.parse(user['created_at'])
+        Cached[id] = user
+      end
+    end
+  end
+
+  def generate_config!
+    force = params['force'].given?
+    path = config_path 
+    unless(not force and test(?e, path))
+      open(path, 'w') do |fd|
+        config = <<-yml
+          domain: 'your-campfire-subdomain'
+          token: 'your-campfire-api-token'
+          room: 'the-campfire-room-to-post-to'
+        yml
+        formatted = config.split(%r/\n/).map{|line| line.strip}.join("\n")
+        fd.puts(formatted)
+      end
+      if STDIN.tty?
+        editor = ENV['EDITOR'] || ENV['EDIT'] || 'open'
+        system("#{ editor } #{ path }")
+      end
+      STDOUT.puts("#{ path }")
+    else
+      STDERR.puts("#{ path } already exists! (use --force to override)")
+      exit 42
+    end
+  end
+
+  def load_config_yml!
+    @domain = @token = @room = nil
+    path = config_path
+    if test(?e, path) or params['config'].given?
+      config = YAML.load(IO.read(path))
+      @domain = config['domain'] if config.has_key?('domain')
+      @token = config['token'] if config.has_key?('token')
+      @room = config['room'] if config.has_key?('room')
+    end
+  end
+
+  def setup!
+    @force = params['force'].given?
+    @debug = params['debug'].given?
+    load_config_yml!
+    @domain ||= params['domain'].value
+    @token ||= params['token'].value
+    @room ||= params['room'].value
+  end
+}
